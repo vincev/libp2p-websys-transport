@@ -1,0 +1,33 @@
+[package]
+authors = ["Vince Vasta <vince.vasta@gmail.com>"]
+description = "libp2p Websocket transport for Wasm apps."
+edition = "2021"
+license = "MIT"
+name = "libp2p-websys-transport"
+repository = "https://github.com/vincev/libp2p-websys-transport"
+version = "0.1.0"
+
+[dependencies]
+futures = "0.3.25"
+js-sys = "0.3.60"
+parking_lot = "0.12.1"
+send_wrapper = "0.6.0"
+thiserror = "1.0.37"
+wasm-bindgen = "0.2.83"
+
+[dependencies.libp2p]
+version = "0.49"
+features = ["floodsub", "mplex", "noise", "wasm-bindgen"]
+
+[dependencies.web-sys]
+version = "0.3.22"
+features = [
+  "BinaryType",
+  "Blob",
+  "ErrorEvent",
+  "FileReader",
+  "MessageEvent",
+  "ProgressEvent",
+  "WebSocket",
+]
+

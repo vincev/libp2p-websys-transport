@@ -223,7 +223,11 @@ impl Connection {
         let close_callback = Closure::<dyn FnMut(_)>::new({
             let shared = shared.clone();
             move |_| {
-                shared.lock().closed = true;
+                let mut locked = shared.lock();
+                locked.closed = true;
+                if let Some(waker) = &locked.waker {
+                    waker.wake_by_ref();
+                }
             }
         });
         socket.set_onclose(Some(close_callback.as_ref().unchecked_ref()));

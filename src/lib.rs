@@ -148,16 +148,26 @@ pub enum Error {
 
 /// A Websocket connection created by the [`WebsocketTransport`].
 pub struct Connection {
+    /// We need to use Mutex as libp2p requires this to be Send.
     shared: Arc<Mutex<Shared>>,
 }
 
 struct Shared {
     opened: bool,
+    closed: bool,
     error: Option<String>,
     data: VecDeque<u8>,
     waker: Option<Waker>,
     socket: SendWrapper<WebSocket>,
+    closures: Option<SendWrapper<Closures>>,
 }
+
+type Closures = (
+    Closure<dyn FnMut()>,
+    Closure<dyn FnMut(MessageEvent)>,
+    Closure<dyn FnMut(web_sys::ErrorEvent)>,
+    Closure<dyn FnMut(web_sys::CloseEvent)>,
+);
 
 impl Connection {
     fn new(socket: WebSocket) -> Self {
@@ -165,13 +175,27 @@ impl Connection {
 
         let shared = Arc::new(Mutex::new(Shared {
             opened: false,
+            closed: false,
             error: None,
             data: VecDeque::with_capacity(1 << 16),
             waker: None,
             socket: SendWrapper::new(socket.clone()),
+            closures: None,
         }));
 
-        let onmessage_callback = Closure::<dyn FnMut(_)>::new({
+        let open_callback = Closure::<dyn FnMut()>::new({
+            let shared = shared.clone();
+            move || {
+                let mut locked = shared.lock();
+                locked.opened = true;
+                if let Some(waker) = &locked.waker {
+                    waker.wake_by_ref();
+                }
+            }
+        });
+        socket.set_onopen(Some(open_callback.as_ref().unchecked_ref()));
+
+        let message_callback = Closure::<dyn FnMut(_)>::new({
             let shared = shared.clone();
             move |e: MessageEvent| {
                 if let Ok(abuf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
@@ -186,30 +210,33 @@ impl Connection {
                 }
             }
         });
-        socket.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-        onmessage_callback.forget();
+        socket.set_onmessage(Some(message_callback.as_ref().unchecked_ref()));
 
-        let onerror_callback = Closure::<dyn FnMut(_)>::new({
+        let error_callback = Closure::<dyn FnMut(_)>::new({
             let shared = shared.clone();
             move |e: ErrorEvent| {
                 shared.lock().error = Some(e.message());
             }
         });
-        socket.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
-        onerror_callback.forget();
+        socket.set_onerror(Some(error_callback.as_ref().unchecked_ref()));
 
-        let onopen_callback = Closure::<dyn FnMut()>::new({
+        let close_callback = Closure::<dyn FnMut(_)>::new({
             let shared = shared.clone();
-            move || {
-                let mut locked = shared.lock();
-                locked.opened = true;
-                if let Some(waker) = &locked.waker {
-                    waker.wake_by_ref();
-                }
+            move |_| {
+                shared.lock().closed = true;
             }
         });
-        socket.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
-        onopen_callback.forget();
+        socket.set_onclose(Some(close_callback.as_ref().unchecked_ref()));
+
+        // Manage closures memory.
+        let closures = SendWrapper::new((
+            open_callback,
+            message_callback,
+            error_callback,
+            close_callback,
+        ));
+
+        shared.lock().closures = Some(closures);
 
         Self { shared }
     }
@@ -226,6 +253,8 @@ impl AsyncRead for Connection {
 
         if let Some(error) = shared.error.as_ref().cloned() {
             Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, error)))
+        } else if shared.closed {
+            Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
         } else if shared.data.is_empty() {
             Poll::Pending
         } else {
@@ -249,6 +278,8 @@ impl AsyncWrite for Connection {
 
         if let Some(error) = shared.error.as_ref().cloned() {
             Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, error)))
+        } else if shared.closed {
+            Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
         } else if !shared.opened {
             Poll::Pending
         } else {

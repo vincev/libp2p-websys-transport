@@ -30,7 +30,7 @@ use libp2p::{
 use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 use wasm_bindgen::{prelude::*, JsCast};
-use web_sys::{ErrorEvent, MessageEvent, WebSocket};
+use web_sys::{MessageEvent, WebSocket};
 
 use std::{
     collections::VecDeque,
@@ -155,7 +155,7 @@ pub struct Connection {
 struct Shared {
     opened: bool,
     closed: bool,
-    error: Option<String>,
+    error: bool,
     data: VecDeque<u8>,
     waker: Option<Waker>,
     socket: SendWrapper<WebSocket>,
@@ -165,7 +165,7 @@ struct Shared {
 type Closures = (
     Closure<dyn FnMut()>,
     Closure<dyn FnMut(MessageEvent)>,
-    Closure<dyn FnMut(web_sys::ErrorEvent)>,
+    Closure<dyn FnMut(web_sys::Event)>,
     Closure<dyn FnMut(web_sys::CloseEvent)>,
 );
 
@@ -176,7 +176,7 @@ impl Connection {
         let shared = Arc::new(Mutex::new(Shared {
             opened: false,
             closed: false,
-            error: None,
+            error: false,
             data: VecDeque::with_capacity(1 << 16),
             waker: None,
             socket: SendWrapper::new(socket.clone()),
@@ -214,8 +214,11 @@ impl Connection {
 
         let error_callback = Closure::<dyn FnMut(_)>::new({
             let shared = shared.clone();
-            move |e: ErrorEvent| {
-                shared.lock().error = Some(e.message());
+            move |_| {
+                // The error event for error callback doesn't give any information and
+                // generates error on the browser console we just signal it to the
+                // stream.
+                shared.lock().error = true;
             }
         });
         socket.set_onerror(Some(error_callback.as_ref().unchecked_ref()));
@@ -255,8 +258,8 @@ impl AsyncRead for Connection {
         let mut shared = self.shared.lock();
         shared.waker = Some(cx.waker().clone());
 
-        if let Some(error) = shared.error.as_ref().cloned() {
-            Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, error)))
+        if shared.error {
+            Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "Socket error")))
         } else if shared.closed {
             Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
         } else if shared.data.is_empty() {
@@ -280,8 +283,8 @@ impl AsyncWrite for Connection {
         let mut shared = self.shared.lock();
         shared.waker = Some(cx.waker().clone());
 
-        if let Some(error) = shared.error.as_ref().cloned() {
-            Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, error)))
+        if shared.error {
+            Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "Socket error")))
         } else if shared.closed {
             Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
         } else if !shared.opened {

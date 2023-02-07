@@ -312,6 +312,8 @@ impl AsyncWrite for Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         let shared = self.shared.lock();
-        let _ = shared.socket.close();
+        if shared.opened {
+            let _ = shared.socket.close();
+        }
     }
 }

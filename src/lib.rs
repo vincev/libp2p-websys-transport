@@ -20,12 +20,12 @@
 // SOFTWARE.
 
 //! Libp2p transports built on [Websys](https://rustwasm.github.io/wasm-bindgen/web-sys/index.html).
-#![warn(clippy::all, rust_2018_idioms, unused_crate_dependencies)]
+#![warn(clippy::all, rust_2018_idioms)]
 
 use futures::{future::Ready, io, prelude::*};
-use libp2p::{
-    core::transport::{ListenerId, Transport, TransportError, TransportEvent},
+use libp2p_core::{
     multiaddr::{Multiaddr, Protocol},
+    transport::{ListenerId, Transport, TransportError, TransportEvent},
 };
 use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
